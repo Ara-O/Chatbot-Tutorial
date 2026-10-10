@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Chatbot</title>
+
+  <style>
+    /* ---------- Colours and fonts: change these to restyle the app ---------- */
+    :root {
+      --page:        #f3f1ec;
+      --panel:       #ffffff;
+      --ink:         #1d1f24;
+      --muted:       #6b7280;
+      --line:        #e2ded5;
+      --user-bubble: #2f5bea;
+      --user-text:   #ffffff;
+      --bot-bubble:  #eeebe4;
+      --bot-text:    #1d1f24;
+      --error:       #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      background: var(--page);
+      color: var(--ink);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    /* ---------- The chat window ---------- */
+    .chat {
+      width: 100%;
+      max-width: 720px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+    }
+
+    .chat-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .chat-header h1 { margin: 0; font-size: 18px; }
+    .chat-header p  { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+
+    /* ---------- The list of messages ---------- */
+    .messages {
+      flex: 1;                 /* take up all the space between header and form */
+      overflow-y: auto;        /* scroll when the conversation gets long */
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .bubble {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 16px;
+      white-space: pre-wrap;   /* keep the line breaks the model sends */
+      overflow-wrap: anywhere;
+    }
+    .bubble.user  { align-self: flex-end;   background: var(--user-bubble); color: var(--user-text); border-bottom-right-radius: 4px; }
+    .bubble.bot   { align-self: flex-start; background: var(--bot-bubble);  color: var(--bot-text);  border-bottom-left-radius: 4px; }
+    .bubble.error { align-self: flex-start; background: #fdecea; color: var(--error); border: 1px solid #f5c2bd; }
+    .bubble.thinking { color: var(--muted); font-style: italic; }
+
+    /* ---------- The box you type in ---------- */
+    .composer {
+      display: flex;
+      gap: 8px;
+      padding: 14px 20px;
+      border-top: 1px solid var(--line);
+    }
+    .composer input {
+      flex: 1;
+      padding: 12px 14px;
+      font: inherit;
+      color: inherit;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    .composer input:focus { outline: 2px solid var(--user-bubble); outline-offset: 1px; }
+    .composer button {
+      padding: 0 20px;
+      font: inherit;
+      font-weight: 600;
+      color: var(--user-text);
+      background: var(--user-bubble);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .composer button:disabled { opacity: 0.5; cursor: default; }
+  </style>
+</head>
+
+<body>
+  <main class="chat">
+    <header class="chat-header">
+      <h1>My Chatbot</h1>
+      <p>Type a message below to start chatting.</p>
+    </header>
+
+    <!-- Every message becomes a <div class="bubble"> inside this box -->
+    <div class="messages" id="messages"></div>
+
+    <form class="composer" id="composer">
+      <input id="input" type="text" placeholder="Say something..." autocomplete="off" autofocus>
+      <button id="send" type="submit">Send</button>
+    </form>
+  </main>
+
+  <script>
+    // ------------------------------------------------------------------
+    // 1. Grab the parts of the page we need
+    // ------------------------------------------------------------------
+    const messagesBox = document.getElementById("messages");
+    const form        = document.getElementById("composer");
+    const input       = document.getElementById("input");
+    const sendButton  = document.getElementById("send");
+
+    // ------------------------------------------------------------------
+    // 2. The conversation so far.
+    //    Each item looks like { role: "user", content: "Hi!" }
+    //    or                   { role: "assistant", content: "Hello!" }
+    //    We send this WHOLE list to the server every time. That list is
+    //    the chatbot's memory.
+    // ------------------------------------------------------------------
+    const messages = [];
+
+    // ------------------------------------------------------------------
+    // 3. Draw one bubble on the screen
+    // ------------------------------------------------------------------
+    function addBubble(kind, text) {
+      const bubble = document.createElement("div");
+      bubble.className = "bubble " + kind;   // kind is "user", "bot" or "error"
+      bubble.textContent = text;             // textContent is safe: it never runs HTML
+      messagesBox.appendChild(bubble);
+      messagesBox.scrollTop = messagesBox.scrollHeight;   // scroll to the newest message
+      return bubble;
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Ask the server for the bot's reply.
+    //    This is the ONLY place the page talks to your backend.
+    //    You will build the "/chat" route in the tutorial.
+    // ------------------------------------------------------------------
+    async function getBotReply() {
+      let response;
+      try {
+        response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: messages }),
+        });
+      } catch (error) {
+        // fetch itself failed: nothing is listening
+        throw new Error("I can't reach a server yet. Start your server, then open http://localhost:3000");
+      }
+
+      if (response.status === 404 || response.status === 405) {
+        throw new Error("Your server is running, but it has no /chat route yet.");
+      }
+
+      // The server answers with JSON: { reply: "..." } or { error: "..." }
+      const data = await response.json().catch(function () { return {}; });
+
+      if (!response.ok) {
+        throw new Error((data.error || "The server crashed.") + " Check the terminal where your server is running.");
+      }
+      return data.reply;
+    }
+
+    // ------------------------------------------------------------------
+    // 5. What happens when you press Send
+    // ------------------------------------------------------------------
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();               // stop the page from reloading
+
+      const text = input.value.trim();
+      if (text === "") return;              // ignore empty messages
+
+      input.value = "";
+      sendButton.disabled = true;
+
+      messages.push({ role: "user", content: text });
+      addBubble("user", text);
+
+      const thinking = addBubble("bot thinking", "Thinking...");
+
+      try {
+        const reply = await getBotReply();
+        messages.push({ role: "assistant", content: reply });
+        thinking.className = "bubble bot";
+        thinking.textContent = reply;
+      } catch (error) {
+        messages.pop();                     // forget the message that got no answer
+        thinking.className = "bubble error";
+        thinking.textContent = error.message;
+      }
+
+      sendButton.disabled = false;
+      input.focus();
+      messagesBox.scrollTop = messagesBox.scrollHeight;
+    });
+  </script>
+</body>
+</html>
